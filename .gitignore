@@ -31,6 +31,10 @@ Thumbs.db
 .env
 .env.*
 
+# Build/distribution
+dist/
+*.egg-info/
+
 # Crawl output
 output/
 *.json

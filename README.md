@@ -21,29 +21,36 @@ Site root (`/`) maps to `{out-dir}/md/index.md`. Failures are logged to `{out-di
 - **Interactive CLI** — guided wizard with [questionary](https://github.com/tmbo/questionary) and [Rich](https://github.com/Textualize/rich)
 - **Docker support** — runs headless out of the box
 
-## Setup
+## Installation
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install crawlboy
 crawl4ai-setup
 ```
 
 > `crawl4ai-setup` installs Playwright/Chromium and can use several hundred MB of disk space. If something fails, run `crawl4ai-doctor`.
+
+### From source
+
+```bash
+git clone https://github.com/aksharahegde/crawlboy.git
+cd crawlboy
+pip install -e .
+crawl4ai-setup
+```
 
 ## Usage
 
 ### Direct sitemap URL
 
 ```bash
-python sitemap_crawler.py --sitemap-url 'https://example.com/sitemap.xml' --out-dir ./out
+crawlboy --sitemap-url 'https://example.com/sitemap.xml' --out-dir ./out
 ```
 
 ### Auto-discover from site root
 
 ```bash
-python sitemap_crawler.py --site-url 'https://www.example.com' --out-dir ./out
+crawlboy --site-url 'https://www.example.com' --out-dir ./out
 ```
 
 Discovery order: `robots.txt` → `/sitemap.xml` → `/sitemap_index.xml` → `/sitemap-index.xml` → `/wp-sitemap.xml`.
@@ -53,9 +60,9 @@ By default with `--site-url`, only URLs matching the site origin host are crawle
 ### Interactive mode
 
 ```bash
-python sitemap_crawler.py --interactive
+crawlboy --interactive
 # or
-python sitemap_crawler.py -i
+crawlboy -i
 ```
 
 The wizard walks through URL mode, output directory, crawl options, and advanced settings before confirming. Requires a TTY — for Docker use `docker run -it ...`.
@@ -91,7 +98,7 @@ Contributions are welcome! Please follow these guidelines:
 
 ### Code Style
 
-- Use Python 3.7+ compatible syntax
+- Use Python 3.10+ compatible syntax
 - Format code with [Black](https://github.com/psf/black) — run `black .` before committing
 - Lint with [ruff](https://github.com/astral-sh/ruff) — run `ruff check .`
 - Follow [PEP 8](https://pep8.org/) conventions
@@ -113,7 +120,7 @@ Contributions are welcome! Please follow these guidelines:
 
 ### Testing
 
-- Test the interactive CLI locally: `python sitemap_crawler.py -i`
+- Test the interactive CLI locally: `crawlboy -i`
 - Test with both `--site-url` and `--sitemap-url` modes
 - Verify output structure matches documentation
 - Test with `--download-images` and `--save-html` flags

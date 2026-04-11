@@ -27,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Technical Details
 
 - Built with [Crawl4AI](https://docs.crawl4ai.com/) for intelligent page crawling
-- Supports Python 3.7+
+- Requires Python 3.10+
+- Installable via `pip install crawlboy`
+- CLI entry point: `crawlboy`
 - Docker image based on Playwright Python for browser automation
 - Async-first architecture for efficient crawling
 - XML namespace-safe sitemap parsing

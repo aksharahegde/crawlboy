@@ -764,7 +764,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--user-agent",
-        default="sitemap-crawl4ai/1.0 (+https://github.com/)",
+        default="crawlboy/1.0 (+https://github.com/aksharahegde/crawlboy)",
         help="User-Agent for sitemap HTTP fetch",
     )
     p.add_argument(
@@ -809,7 +809,7 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     if args.interactive:
-        from interactive_cli import run_interactive_wizard
+        from crawlboy.cli import run_interactive_wizard
 
         args = run_interactive_wizard()
     else:

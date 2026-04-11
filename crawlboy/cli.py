@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-_DEFAULT_UA = "sitemap-crawl4ai/1.0 (+https://github.com/)"
+_DEFAULT_UA = "crawlboy/1.0 (+https://github.com/aksharahegde/crawlboy)"
 
 _QSTYLE = Style(
     [
@@ -115,9 +115,7 @@ def _validate_out_dir(text: str) -> bool | str:
 
 def _print_banner(console: Console) -> None:
     title = Text()
-    title.append("sitemap", style="bold cyan")
-    title.append("-", style="white")
-    title.append("crawl4ai", style="bold magenta")
+    title.append("crawlboy", style="bold cyan")
     subtitle = Text(
         "Crawl sitemap URLs with Crawl4AI — markdown per page",
         style="dim",
