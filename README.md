@@ -84,3 +84,45 @@ docker build -t crawlboy .
 docker run --rm -v "$(pwd)/out:/out" crawlboy \
   --site-url 'https://www.example.com' --out-dir /out
 ```
+
+## Contributing
+
+Contributions are welcome! Please follow these guidelines:
+
+### Code Style
+
+- Use Python 3.7+ compatible syntax
+- Format code with [Black](https://github.com/psf/black) — run `black .` before committing
+- Lint with [ruff](https://github.com/astral-sh/ruff) — run `ruff check .`
+- Follow [PEP 8](https://pep8.org/) conventions
+
+### Commit Messages
+
+- Use present tense, imperative mood ("add feature", not "added feature")
+- Be concise and descriptive (under 70 characters for the subject line)
+- Reference issues if applicable (e.g., "Fix #123")
+- Example: `Fix image path rewriting for nested URLs`
+
+### Pull Requests
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/your-feature`
+3. Commit your changes with clear messages
+4. Test thoroughly before pushing
+5. Open a PR with a clear description of changes
+
+### Testing
+
+- Test the interactive CLI locally: `python sitemap_crawler.py -i`
+- Test with both `--site-url` and `--sitemap-url` modes
+- Verify output structure matches documentation
+- Test with `--download-images` and `--save-html` flags
+- Run against a small sitemap first (use `--max-urls`)
+
+### Reporting Issues
+
+Include:
+- Steps to reproduce
+- Python version and OS
+- Full error output or stack trace
+- Sample sitemap URL (if possible)
