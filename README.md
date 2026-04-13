@@ -141,6 +141,33 @@ out/
 └── errors.jsonl # Failed URLs with error details
 ```
 
+## Verified Working
+
+Crawlboy has been tested and verified to work with real websites. Here's a recent test run:
+
+**Command:**
+```bash
+crawlboy --site-url 'https://aksharahegde.xyz' --out-dir ./test-output --max-urls 5
+```
+
+**Test Results:**
+- Auto-discovery: Found sitemap from `robots.txt` ✓
+- Pages crawled: 5/5 successful, 0 failures
+- Total time: ~13 seconds
+- Redirect handling: Automatically handled aksharahegde.xyz → www.aksharahegde.xyz
+
+**Output Generated:**
+```
+test-output/md/
+├── index.md          (3.1 KB) — homepage content
+├── blog.md           (3.2 KB) — blog page
+├── projects.md       (5.3 KB) — projects page
+├── resources.md      (628 B) — resources page
+└── shop.md           (564 B) — shop page
+```
+
+All Markdown files contain properly formatted content with preserved links and page structure.
+
 ## Contributing
 
 Contributions are welcome! Please follow these guidelines:
