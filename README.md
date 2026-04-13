@@ -92,6 +92,55 @@ docker run --rm -v "$(pwd)/out:/out" crawlboy \
   --site-url 'https://www.example.com' --out-dir /out
 ```
 
+## For LLM Agents
+
+Instructions for AI coding agents (Claude Code, Cursor, Copilot, etc.) to install and use Crawlboy.
+
+### Installation
+
+```bash
+git clone https://github.com/aksharahegde/crawlboy.git
+cd crawlboy
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+crawl4ai-setup
+```
+
+### Running a Scrape
+
+Crawl a site by auto-discovering its sitemap:
+
+```bash
+source .venv/bin/activate
+crawlboy --site-url 'https://www.example.com' --out-dir ./out
+```
+
+Or provide a direct sitemap URL:
+
+```bash
+source .venv/bin/activate
+crawlboy --sitemap-url 'https://example.com/sitemap.xml' --out-dir ./out
+```
+
+Useful flags for agent workflows:
+
+- `--max-urls N` — limit to N pages (good for testing)
+- `--save-html` — also save raw HTML
+- `--download-images` — download images and rewrite paths in Markdown/HTML
+- `--delay N` — wait N seconds between pages to avoid rate limiting
+- `--fail-fast` — stop on first error instead of continuing
+
+Output structure:
+
+```
+out/
+├── md/          # One Markdown file per page, mirroring URL path
+├── html/        # Raw HTML (with --save-html)
+├── media/       # Downloaded images (with --download-images)
+└── errors.jsonl # Failed URLs with error details
+```
+
 ## Contributing
 
 Contributions are welcome! Please follow these guidelines:
