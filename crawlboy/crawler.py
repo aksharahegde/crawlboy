@@ -5,21 +5,29 @@ import argparse
 import asyncio
 import gzip
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import re
+import socket
 import sys
 import time
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as ET
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import urldefrag, urlparse, urljoin
+from urllib.parse import urldefrag, urlparse, urljoin, urlunparse
 
 import httpx
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 
 log = logging.getLogger(__name__)
+
+DEFAULT_MAX_SITEMAP_BYTES = 5_000_000
+DEFAULT_MAX_SITEMAP_URLS = 50_000
+DEFAULT_MAX_SITEMAP_DEPTH = 32
+DEFAULT_MAX_MEDIA_FILE_BYTES = 10_000_000
+DEFAULT_MAX_MEDIA_TOTAL_BYTES = 250_000_000
 
 
 def _local_tag(tag: str) -> str:
@@ -34,10 +42,86 @@ def _decode_sitemap_body(content: bytes, url: str) -> bytes:
     return content
 
 
-async def fetch_sitemap_bytes(client: httpx.AsyncClient, url: str) -> bytes:
+def _host_is_denied_ip(host: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _resolved_ips_denied(host: str) -> bool:
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return True
+    seen: set[str] = set()
+    for info in infos:
+        addr = info[4][0]
+        if addr in seen:
+            continue
+        seen.add(addr)
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return True
+    return False
+
+
+def validate_network_target(url: str, *, allow_unsafe_network_targets: bool) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"Only http/https URLs are allowed: {url!r}")
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"URL has no hostname: {url!r}")
+    if allow_unsafe_network_targets:
+        return
+    if _host_is_denied_ip(host) or _resolved_ips_denied(host):
+        raise ValueError(f"Blocked unsafe network target: {url!r}")
+
+
+async def fetch_sitemap_bytes(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    allow_unsafe_network_targets: bool,
+    max_sitemap_bytes: int,
+) -> bytes:
+    validate_network_target(url, allow_unsafe_network_targets=allow_unsafe_network_targets)
     response = await client.get(url, follow_redirects=True)
     response.raise_for_status()
-    return _decode_sitemap_body(response.content, str(response.url))
+    content_length = response.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_sitemap_bytes:
+                raise RuntimeError(
+                    f"Sitemap too large by content-length ({content_length} > {max_sitemap_bytes}) for {url!r}"
+                )
+        except ValueError:
+            pass
+    decoded = _decode_sitemap_body(response.content, str(response.url))
+    if len(decoded) > max_sitemap_bytes:
+        raise RuntimeError(
+            f"Sitemap too large after decode ({len(decoded)} > {max_sitemap_bytes}) for {url!r}"
+        )
+    return decoded
 
 
 def _parse_root(xml_bytes: bytes) -> ET.Element:
@@ -48,14 +132,26 @@ async def collect_urls_from_sitemap(
     client: httpx.AsyncClient,
     sitemap_url: str,
     *,
-    max_depth: int = 32,
+    allow_unsafe_network_targets: bool = False,
+    max_depth: int = DEFAULT_MAX_SITEMAP_DEPTH,
+    max_urls: int = DEFAULT_MAX_SITEMAP_URLS,
+    max_sitemap_bytes: int = DEFAULT_MAX_SITEMAP_BYTES,
     _depth: int = 0,
 ) -> list[str]:
     if _depth > max_depth:
         raise RuntimeError(f"Sitemap nesting exceeded max_depth={max_depth}")
 
-    log.debug("fetch_sitemap depth=%d url=%s", _depth, sitemap_url)
-    xml_bytes = await fetch_sitemap_bytes(client, sitemap_url)
+    log.debug(
+        "fetch_sitemap depth=%d url=%s",
+        _depth,
+        redact_url_for_logs(sitemap_url),
+    )
+    xml_bytes = await fetch_sitemap_bytes(
+        client,
+        sitemap_url,
+        allow_unsafe_network_targets=allow_unsafe_network_targets,
+        max_sitemap_bytes=max_sitemap_bytes,
+    )
     root = _parse_root(xml_bytes)
     root_name = _local_tag(root.tag)
 
@@ -74,12 +170,26 @@ async def collect_urls_from_sitemap(
                 continue
             child_locs += 1
             resolved = urljoin(sitemap_url, loc_text)
-            log.debug("sitemap_index depth=%d child_sitemap=%s", _depth, resolved)
+            log.debug(
+                "sitemap_index depth=%d child_sitemap=%s",
+                _depth,
+                redact_url_for_logs(resolved),
+            )
             out.extend(
                 await collect_urls_from_sitemap(
-                    client, resolved, max_depth=max_depth, _depth=_depth + 1
+                    client,
+                    resolved,
+                    allow_unsafe_network_targets=allow_unsafe_network_targets,
+                    max_depth=max_depth,
+                    max_urls=max_urls,
+                    max_sitemap_bytes=max_sitemap_bytes,
+                    _depth=_depth + 1,
                 )
             )
+            if len(out) > max_urls:
+                raise RuntimeError(
+                    f"Sitemap URL count exceeded max_sitemap_urls={max_urls}"
+                )
         log.debug(
             "sitemap_index depth=%d child_sitemaps=%d merged_page_urls=%d",
             _depth,
@@ -96,17 +206,21 @@ async def collect_urls_from_sitemap(
             for child in uel:
                 if _local_tag(child.tag) == "loc" and child.text and child.text.strip():
                     urls.append(child.text.strip())
+                    if len(urls) > max_urls:
+                        raise RuntimeError(
+                            f"Sitemap URL count exceeded max_sitemap_urls={max_urls}"
+                        )
                     break
         log.debug(
             "urlset depth=%d sitemap_url=%s loc_count=%d",
             _depth,
-            sitemap_url,
+            redact_url_for_logs(sitemap_url),
             len(urls),
         )
         return urls
 
     raise ValueError(
-        f"Unsupported sitemap root element: {root_name!r} in {sitemap_url!r}"
+        f"Unsupported sitemap root element: {root_name!r} in {redact_url_for_logs(sitemap_url)!r}"
     )
 
 
@@ -136,9 +250,34 @@ def normalize_site_url(url: str) -> str:
     if not u.startswith(("http://", "https://")):
         u = "https://" + u
     parsed = urlparse(u)
-    if not parsed.netloc:
+    if not parsed.hostname:
         raise ValueError(f"Invalid --site-url: {url!r}")
-    return f"{parsed.scheme}://{parsed.netloc}"
+    host = parsed.hostname.lower()
+    if parsed.port:
+        netloc = f"{host}:{parsed.port}"
+    else:
+        netloc = host
+    return f"{parsed.scheme}://{netloc}"
+
+
+def redact_url_for_logs(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    netloc = parsed.hostname or ""
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    if not parsed.scheme:
+        return url
+    return urlunparse((parsed.scheme, netloc, parsed.path, "", "", ""))
+
+
+def safe_out_path(out_dir: Path, relative_path: Path) -> Path:
+    target = (out_dir / relative_path).resolve()
+    if not target.is_relative_to(out_dir):
+        raise RuntimeError(f"Refusing to write outside out_dir: {relative_path!r}")
+    return target
 
 
 def parse_robots_sitemap_lines(text: str, origin: str) -> list[str]:
@@ -159,14 +298,25 @@ def parse_robots_sitemap_lines(text: str, origin: str) -> list[str]:
     return out
 
 
-async def url_looks_like_sitemap(client: httpx.AsyncClient, url: str) -> bool:
+async def url_looks_like_sitemap(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    allow_unsafe_network_targets: bool,
+    max_sitemap_bytes: int,
+) -> bool:
     try:
+        validate_network_target(
+            url, allow_unsafe_network_targets=allow_unsafe_network_targets
+        )
         response = await client.get(
             url, follow_redirects=True, timeout=httpx.Timeout(60.0)
         )
         if response.status_code != 200:
             return False
         body = _decode_sitemap_body(response.content, str(response.url))
+        if len(body) > max_sitemap_bytes:
+            return False
         root = ET.fromstring(body)
         return _local_tag(root.tag) in ("urlset", "sitemapindex")
     except Exception:
@@ -174,11 +324,18 @@ async def url_looks_like_sitemap(client: httpx.AsyncClient, url: str) -> bool:
 
 
 async def discover_sitemap_entry_urls(
-    client: httpx.AsyncClient, site_url: str
+    client: httpx.AsyncClient,
+    site_url: str,
+    *,
+    allow_unsafe_network_targets: bool,
+    max_sitemap_bytes: int,
 ) -> list[str]:
     origin = normalize_site_url(site_url)
     robots_url = urljoin(origin + "/", "robots.txt")
     try:
+        validate_network_target(
+            robots_url, allow_unsafe_network_targets=allow_unsafe_network_targets
+        )
         response = await client.get(
             robots_url, follow_redirects=True, timeout=httpx.Timeout(60.0)
         )
@@ -186,34 +343,68 @@ async def discover_sitemap_entry_urls(
             found = parse_robots_sitemap_lines(response.text, origin)
             if found:
                 return found
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("robots.txt fetch failed for %s: %s", redact_url_for_logs(robots_url), exc)
 
     for path in FALLBACK_SITEMAP_PATHS:
         candidate = urljoin(origin + "/", path.lstrip("/"))
-        if await url_looks_like_sitemap(client, candidate):
+        if await url_looks_like_sitemap(
+            client,
+            candidate,
+            allow_unsafe_network_targets=allow_unsafe_network_targets,
+            max_sitemap_bytes=max_sitemap_bytes,
+        ):
             return [candidate]
     return []
 
 
 async def collect_page_urls_for_site(
-    client: httpx.AsyncClient, site_url: str
+    client: httpx.AsyncClient,
+    site_url: str,
+    *,
+    allow_unsafe_network_targets: bool,
+    max_sitemap_depth: int,
+    max_sitemap_urls: int,
+    max_sitemap_bytes: int,
 ) -> list[str]:
     origin = normalize_site_url(site_url)
-    entries = await discover_sitemap_entry_urls(client, site_url)
+    entries = await discover_sitemap_entry_urls(
+        client,
+        site_url,
+        allow_unsafe_network_targets=allow_unsafe_network_targets,
+        max_sitemap_bytes=max_sitemap_bytes,
+    )
     if not entries:
         raise RuntimeError(
             "No sitemap found for this site; use --sitemap-url with a direct sitemap URL."
         )
-    log.info("Discovered %d sitemap entr%s for %s", len(entries), "ies" if len(entries) != 1 else "y", origin)
-    preview = entries[:5]
+    log.info(
+        "Discovered %d sitemap entr%s for %s",
+        len(entries),
+        "ies" if len(entries) != 1 else "y",
+        redact_url_for_logs(origin),
+    )
+    preview = [redact_url_for_logs(e) for e in entries[:5]]
     if len(entries) > 5:
         log.info("Sitemap entry URLs: %s … (%d more)", ", ".join(preview), len(entries) - 5)
     else:
-        log.info("Sitemap entry URLs: %s", ", ".join(entries))
+        log.info("Sitemap entry URLs: %s", ", ".join(preview))
     merged: list[str] = []
     for entry in entries:
-        merged.extend(await collect_urls_from_sitemap(client, entry))
+        merged.extend(
+            await collect_urls_from_sitemap(
+                client,
+                entry,
+                allow_unsafe_network_targets=allow_unsafe_network_targets,
+                max_depth=max_sitemap_depth,
+                max_urls=max_sitemap_urls,
+                max_sitemap_bytes=max_sitemap_bytes,
+            )
+        )
+        if len(merged) > max_sitemap_urls:
+            raise RuntimeError(
+                f"Sitemap URL count exceeded max_sitemap_urls={max_sitemap_urls}"
+            )
     return dedupe_preserve_order(merged)
 
 
@@ -369,10 +560,17 @@ async def ensure_image_downloaded(
     cache: dict[str, Path],
     referer: str,
     user_agent: str,
-) -> Path | None:
+    allow_unsafe_network_targets: bool,
+    max_media_file_bytes: int,
+    max_media_total_remaining_bytes: int,
+) -> tuple[Path | None, int]:
     if url_key in cache:
-        return cache[url_key]
+        return cache[url_key], 0
     try:
+        validate_network_target(
+            absolute_url,
+            allow_unsafe_network_targets=allow_unsafe_network_targets,
+        )
         resp = await client.get(
             absolute_url,
             follow_redirects=True,
@@ -381,16 +579,30 @@ async def ensure_image_downloaded(
         )
         resp.raise_for_status()
     except Exception:
-        return None
+        return None, 0
+    content_length = resp.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_media_file_bytes:
+                return None, 0
+            if int(content_length) > max_media_total_remaining_bytes:
+                return None, 0
+        except ValueError:
+            pass
+    body = resp.content
+    if len(body) > max_media_file_bytes:
+        return None, 0
+    if len(body) > max_media_total_remaining_bytes:
+        return None, 0
     ext = pick_image_extension(str(resp.url), resp.headers.get("content-type"))
     stem = hashlib.sha256(url_key.encode()).hexdigest()[:16]
     name = f"{stem}{ext}"
     dest = media_dir / name
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(resp.content)
+    dest.write_bytes(body)
     rel = Path("media") / name
     cache[url_key] = rel
-    return rel
+    return rel, len(body)
 
 
 def link_from_output_file(output_file: Path, asset_rel_to_out: Path, out_dir: Path) -> str:
@@ -466,11 +678,21 @@ def rewrite_html_image_urls(html: str, base_url: str, url_to_rel: dict[str, str]
 async def run(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    errors_path = out_dir / "errors.jsonl"
+    if (
+        args.max_sitemap_depth <= 0
+        or args.max_sitemap_urls <= 0
+        or args.max_sitemap_bytes <= 0
+        or args.max_media_file_bytes <= 0
+        or args.max_media_total_bytes <= 0
+    ):
+        raise SystemExit(
+            "All security limit flags must be positive integers."
+        )
+    errors_path = safe_out_path(out_dir, Path("errors.jsonl"))
 
     log.info(
         "Crawl start out_dir=%s max_urls=%s delay=%s page_timeout_ms=%s headless=%s "
-        "download_images=%s save_html=%s fail_fast=%s user_agent=%s",
+        "download_images=%s save_html=%s fail_fast=%s user_agent=%s allow_unsafe_network_targets=%s",
         out_dir,
         args.max_urls,
         args.delay,
@@ -480,15 +702,19 @@ async def run(args: argparse.Namespace) -> int:
         args.save_html,
         args.fail_fast,
         args.user_agent,
+        args.allow_unsafe_network_targets,
     )
     if args.site_url:
         log.info(
             "Source mode=site_url site_url=%s include_offsite_urls=%s",
-            args.site_url,
+            redact_url_for_logs(args.site_url),
             args.include_offsite_urls,
         )
     else:
-        log.info("Source mode=sitemap_url sitemap_url=%s", args.sitemap_url)
+        log.info(
+            "Source mode=sitemap_url sitemap_url=%s",
+            redact_url_for_logs(args.sitemap_url),
+        )
 
     limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
     urls: list[str] = []
@@ -500,20 +726,34 @@ async def run(args: argparse.Namespace) -> int:
         try:
             if args.site_url:
                 site_origin = normalize_site_url(args.site_url)
-                urls = await collect_page_urls_for_site(http_client, args.site_url)
+                urls = await collect_page_urls_for_site(
+                    http_client,
+                    args.site_url,
+                    allow_unsafe_network_targets=args.allow_unsafe_network_targets,
+                    max_sitemap_depth=args.max_sitemap_depth,
+                    max_sitemap_urls=args.max_sitemap_urls,
+                    max_sitemap_bytes=args.max_sitemap_bytes,
+                )
                 pre_host_filter = len(urls)
                 if not args.include_offsite_urls:
                     urls = filter_urls_same_host(urls, site_origin)
                     if pre_host_filter != len(urls):
                         log.info(
                             "Host filter same_host=%s kept=%d dropped=%d",
-                            site_origin,
+                            redact_url_for_logs(site_origin),
                             len(urls),
                             pre_host_filter - len(urls),
                         )
             else:
-                urls = await collect_urls_from_sitemap(http_client, args.sitemap_url)
-        except RuntimeError as exc:
+                urls = await collect_urls_from_sitemap(
+                    http_client,
+                    args.sitemap_url,
+                    allow_unsafe_network_targets=args.allow_unsafe_network_targets,
+                    max_depth=args.max_sitemap_depth,
+                    max_urls=args.max_sitemap_urls,
+                    max_sitemap_bytes=args.max_sitemap_bytes,
+                )
+        except (RuntimeError, ValueError) as exc:
             log.error("%s", exc)
             return 2
 
@@ -529,7 +769,7 @@ async def run(args: argparse.Namespace) -> int:
 
         log.info("Final URL queue: %d pages", len(urls))
         for u in urls:
-            log.debug("queue url=%s", u)
+            log.debug("queue url=%s", redact_url_for_logs(u))
 
         if not urls:
             log.warning("No URLs to crawl; exiting")
@@ -555,7 +795,8 @@ async def run(args: argparse.Namespace) -> int:
 
         output_path_map: dict[str, str] = {}
         image_cache: dict[str, Path] = {}
-        media_dir = out_dir / "media"
+        media_dir = safe_out_path(out_dir, Path("media"))
+        media_total_bytes = 0
         exit_code = 0
         attempted = 0
         successes = 0
@@ -567,7 +808,34 @@ async def run(args: argparse.Namespace) -> int:
             for i, url in enumerate(urls):
                 rel_md = relative_md_path_with_collision(url, output_path_map)
                 out_rel = (Path("md") / rel_md).as_posix()
-                log.info("Crawl %d/%d start url=%s", i + 1, n, url)
+                log.info("Crawl %d/%d start url=%s", i + 1, n, redact_url_for_logs(url))
+                try:
+                    validate_network_target(
+                        url,
+                        allow_unsafe_network_targets=args.allow_unsafe_network_targets,
+                    )
+                except ValueError as exc:
+                    exit_code = 1
+                    failures += 1
+                    attempted += 1
+                    err = str(exc)
+                    log.error(
+                        "Crawl %d/%d blocked url=%s error=%s",
+                        i + 1,
+                        n,
+                        redact_url_for_logs(url),
+                        err,
+                    )
+                    record = {
+                        "url": redact_url_for_logs(url),
+                        "output_path": out_rel,
+                        "error": err,
+                    }
+                    with errors_path.open("a", encoding="utf-8") as ef:
+                        ef.write(json.dumps(record) + "\n")
+                    if args.fail_fast:
+                        break
+                    continue
                 try:
                     result = await crawler.arun(url=url, config=run_config)
                 except Exception as exc:
@@ -575,8 +843,18 @@ async def run(args: argparse.Namespace) -> int:
                     failures += 1
                     attempted += 1
                     err = repr(exc)
-                    log.error("Crawl %d/%d failed url=%s error=%s", i + 1, n, url, err)
-                    record = {"url": url, "output_path": out_rel, "error": err}
+                    log.error(
+                        "Crawl %d/%d failed url=%s error=%s",
+                        i + 1,
+                        n,
+                        redact_url_for_logs(url),
+                        err,
+                    )
+                    record = {
+                        "url": redact_url_for_logs(url),
+                        "output_path": out_rel,
+                        "error": err,
+                    }
                     with errors_path.open("a", encoding="utf-8") as ef:
                         ef.write(json.dumps(record) + "\n")
                     if args.fail_fast:
@@ -588,9 +866,15 @@ async def run(args: argparse.Namespace) -> int:
                     failures += 1
                     attempted += 1
                     err = result.error_message or "crawl failed"
-                    log.error("Crawl %d/%d failed url=%s error=%s", i + 1, n, url, err)
+                    log.error(
+                        "Crawl %d/%d failed url=%s error=%s",
+                        i + 1,
+                        n,
+                        redact_url_for_logs(url),
+                        err,
+                    )
                     record = {
-                        "url": url,
+                        "url": redact_url_for_logs(url),
                         "output_path": out_rel,
                         "error": err,
                     }
@@ -614,14 +898,20 @@ async def run(args: argparse.Namespace) -> int:
                         base_for_assets, html_body, media_dict
                     )
                     url_to_rel: dict[str, str] = {}
-                    md_path = out_dir / "md" / rel_md
+                    md_path = safe_out_path(out_dir, Path("md") / rel_md)
                     new_saves = 0
                     cache_hits = 0
                     failed_img = 0
                     for abs_u in img_urls:
                         key = normalize_asset_url(abs_u)
                         in_cache_before = key in image_cache
-                        saved = await ensure_image_downloaded(
+                        remaining_media_bytes = max(
+                            0, args.max_media_total_bytes - media_total_bytes
+                        )
+                        if remaining_media_bytes <= 0:
+                            failed_img += 1
+                            continue
+                        saved, saved_bytes = await ensure_image_downloaded(
                             http_client,
                             abs_u,
                             key,
@@ -629,8 +919,12 @@ async def run(args: argparse.Namespace) -> int:
                             image_cache,
                             referer=base_for_assets,
                             user_agent=args.user_agent,
+                            allow_unsafe_network_targets=args.allow_unsafe_network_targets,
+                            max_media_file_bytes=args.max_media_file_bytes,
+                            max_media_total_remaining_bytes=remaining_media_bytes,
                         )
                         if saved is not None:
+                            media_total_bytes += saved_bytes
                             url_to_rel[key] = link_from_output_file(
                                 md_path, saved, out_dir
                             )
@@ -640,7 +934,10 @@ async def run(args: argparse.Namespace) -> int:
                                 new_saves += 1
                         elif not in_cache_before:
                             failed_img += 1
-                            log.debug("Image download failed url=%s", abs_u)
+                            log.debug(
+                                "Image download failed url=%s",
+                                redact_url_for_logs(abs_u),
+                            )
                     log.info(
                         "Images page %d/%d discovered=%d saved_new=%d cache_hits=%d failed=%d",
                         i + 1,
@@ -656,13 +953,15 @@ async def run(args: argparse.Namespace) -> int:
                             html_body, base_for_assets, url_to_rel
                         )
 
-                md_path = out_dir / "md" / rel_md
+                md_path = safe_out_path(out_dir, Path("md") / rel_md)
                 md_path.parent.mkdir(parents=True, exist_ok=True)
                 md_path.write_text(md, encoding="utf-8")
 
                 html_note = ""
                 if args.save_html and html_body:
-                    html_path = out_dir / "html" / rel_md.with_suffix(".html")
+                    html_path = safe_out_path(
+                        out_dir, Path("html") / rel_md.with_suffix(".html")
+                    )
                     html_path.parent.mkdir(parents=True, exist_ok=True)
                     html_path.write_text(html_body, encoding="utf-8")
                     html_note = f" html={html_path.relative_to(out_dir).as_posix()}"
@@ -722,6 +1021,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-offsite-urls",
         action="store_true",
         help="With --site-url, crawl URLs on other hosts too (default: only URLs matching the site host)",
+    )
+    p.add_argument(
+        "--allow-unsafe-network-targets",
+        action="store_true",
+        help="Allow crawling private/loopback/link-local/reserved network targets (unsafe)",
+    )
+    p.add_argument(
+        "--max-sitemap-depth",
+        type=int,
+        default=DEFAULT_MAX_SITEMAP_DEPTH,
+        help=f"Maximum nested sitemap index depth (default: {DEFAULT_MAX_SITEMAP_DEPTH})",
+    )
+    p.add_argument(
+        "--max-sitemap-urls",
+        type=int,
+        default=DEFAULT_MAX_SITEMAP_URLS,
+        help=f"Maximum URLs accepted from sitemap expansion (default: {DEFAULT_MAX_SITEMAP_URLS})",
+    )
+    p.add_argument(
+        "--max-sitemap-bytes",
+        type=int,
+        default=DEFAULT_MAX_SITEMAP_BYTES,
+        help=f"Maximum decoded sitemap payload bytes (default: {DEFAULT_MAX_SITEMAP_BYTES})",
+    )
+    p.add_argument(
+        "--max-media-file-bytes",
+        type=int,
+        default=DEFAULT_MAX_MEDIA_FILE_BYTES,
+        help=f"Maximum bytes for one downloaded media file (default: {DEFAULT_MAX_MEDIA_FILE_BYTES})",
+    )
+    p.add_argument(
+        "--max-media-total-bytes",
+        type=int,
+        default=DEFAULT_MAX_MEDIA_TOTAL_BYTES,
+        help=f"Maximum total bytes for downloaded media files (default: {DEFAULT_MAX_MEDIA_TOTAL_BYTES})",
     )
     p.add_argument(
         "--delay",

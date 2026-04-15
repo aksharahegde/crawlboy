@@ -82,6 +82,12 @@ The wizard walks through URL mode, output directory, crawl options, and advanced
 | `--no-headless` | Show the browser window | off |
 | `--fail-fast` | Stop on first crawl error | off |
 | `--include-offsite-urls` | Crawl hosts outside site origin (`--site-url` only) | off |
+| `--allow-unsafe-network-targets` | Allow private/loopback/link-local/reserved targets (unsafe) | off |
+| `--max-sitemap-depth` | Maximum nested sitemap index depth | `32` |
+| `--max-sitemap-urls` | Maximum URLs accepted from sitemap expansion | `50000` |
+| `--max-sitemap-bytes` | Maximum decoded bytes per sitemap payload | `5000000` |
+| `--max-media-file-bytes` | Maximum bytes for one downloaded media file | `10000000` |
+| `--max-media-total-bytes` | Maximum total bytes for downloaded media files | `250000000` |
 | `-i`, `--interactive` | Launch guided wizard | off |
 
 ## Docker
@@ -209,3 +215,18 @@ Include:
 - Python version and OS
 - Full error output or stack trace
 - Sample sitemap URL (if possible)
+
+
+## Security
+
+Crawlboy applies secure defaults to reduce abuse risk from untrusted sitemap and page content:
+
+- Deny-by-default network target checks for private, loopback, link-local, multicast, reserved, and unspecified IP ranges
+- Sitemap depth, URL count, and payload-size limits
+- Media download file-size and total-size limits
+- URL redaction in logs and `errors.jsonl` output
+- Output path containment under `--out-dir`
+
+Use `--allow-unsafe-network-targets` only in trusted internal environments where private network crawling is intentional.
+
+See `SECURITY.md` and `docs/security/` for reporting and control details.

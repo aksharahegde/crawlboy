@@ -7,6 +7,16 @@ from urllib.parse import urlparse
 
 import questionary
 from questionary import Style
+
+from crawlboy.crawler import (
+    DEFAULT_MAX_MEDIA_FILE_BYTES,
+    DEFAULT_MAX_MEDIA_TOTAL_BYTES,
+    DEFAULT_MAX_SITEMAP_BYTES,
+    DEFAULT_MAX_SITEMAP_DEPTH,
+    DEFAULT_MAX_SITEMAP_URLS,
+    normalize_site_url,
+    redact_url_for_logs,
+)
 from rich import box
 from rich.align import Align
 from rich.console import Console
@@ -28,18 +38,6 @@ _QSTYLE = Style(
 )
 
 
-def _normalize_site_url(url: str) -> str:
-    u = url.strip().rstrip("/")
-    if not u:
-        raise ValueError("URL cannot be empty")
-    if not u.startswith(("http://", "https://")):
-        u = "https://" + u
-    parsed = urlparse(u)
-    if not parsed.netloc:
-        raise ValueError(f"Invalid site URL: {url!r}")
-    return f"{parsed.scheme}://{parsed.netloc}"
-
-
 def _normalize_sitemap_url(url: str) -> str:
     u = url.strip()
     if not u:
@@ -54,7 +52,7 @@ def _normalize_sitemap_url(url: str) -> str:
 
 def _validate_site_url(text: str) -> bool | str:
     try:
-        _normalize_site_url(text)
+        normalize_site_url(text)
     except ValueError as e:
         return str(e)
     return True
@@ -104,6 +102,19 @@ def _validate_max_urls(text: str) -> bool | str:
         return "Enter an integer or leave empty"
     if v < 0:
         return "Must be >= 0"
+    return True
+
+
+def _validate_positive_int(text: str) -> bool | str:
+    t = text.strip()
+    if not t:
+        return True
+    try:
+        v = int(t, 10)
+    except ValueError:
+        return "Enter a positive integer"
+    if v <= 0:
+        return "Must be > 0"
     return True
 
 
@@ -166,7 +177,7 @@ def run_interactive_wizard() -> argparse.Namespace:
         ).ask()
         if url_raw is None:
             raise SystemExit(1)
-        site_url = _normalize_site_url(url_raw)
+        site_url = normalize_site_url(url_raw)
         sitemap_url = None
     else:
         url_raw = questionary.text(
@@ -208,6 +219,10 @@ def run_interactive_wizard() -> argparse.Namespace:
                 checked=True,
             ),
             questionary.Choice("Verbose DEBUG logging", value="verbose"),
+            questionary.Choice(
+                "Allow unsafe network targets (private/loopback — use with care)",
+                value="unsafe_network",
+            ),
         ],
         style=_QSTYLE,
     ).ask()
@@ -220,7 +235,11 @@ def run_interactive_wizard() -> argparse.Namespace:
     max_urls_s = ""
     user_agent = _DEFAULT_UA
 
-    if questionary.confirm("Edit advanced settings (delay, timeouts, max URLs, user-agent)?", default=False, style=_QSTYLE).ask():
+    if questionary.confirm(
+        "Edit advanced settings (delay, timeouts, max URLs, user-agent)?",
+        default=False,
+        style=_QSTYLE,
+    ).ask():
         delay_s = questionary.text(
             "Delay after each successful page (seconds, 0 = none)",
             default=delay_s,
@@ -258,6 +277,62 @@ def run_interactive_wizard() -> argparse.Namespace:
         if ua.strip():
             user_agent = ua.strip()
 
+    max_sitemap_depth_s = str(DEFAULT_MAX_SITEMAP_DEPTH)
+    max_sitemap_urls_s = str(DEFAULT_MAX_SITEMAP_URLS)
+    max_sitemap_bytes_s = str(DEFAULT_MAX_SITEMAP_BYTES)
+    max_media_file_bytes_s = str(DEFAULT_MAX_MEDIA_FILE_BYTES)
+    max_media_total_bytes_s = str(DEFAULT_MAX_MEDIA_TOTAL_BYTES)
+
+    if questionary.confirm(
+        "Edit security limits (sitemap depth, URL cap, payload size, media caps)?",
+        default=False,
+        style=_QSTYLE,
+    ).ask():
+        max_sitemap_depth_s = questionary.text(
+            "Max nested sitemap index depth",
+            default=max_sitemap_depth_s,
+            validate=_validate_positive_int,
+            style=_QSTYLE,
+        ).ask()
+        if max_sitemap_depth_s is None:
+            raise SystemExit(1)
+
+        max_sitemap_urls_s = questionary.text(
+            "Max URLs from sitemap expansion",
+            default=max_sitemap_urls_s,
+            validate=_validate_positive_int,
+            style=_QSTYLE,
+        ).ask()
+        if max_sitemap_urls_s is None:
+            raise SystemExit(1)
+
+        max_sitemap_bytes_s = questionary.text(
+            "Max decoded sitemap bytes per file",
+            default=max_sitemap_bytes_s,
+            validate=_validate_positive_int,
+            style=_QSTYLE,
+        ).ask()
+        if max_sitemap_bytes_s is None:
+            raise SystemExit(1)
+
+        max_media_file_bytes_s = questionary.text(
+            "Max bytes per downloaded image",
+            default=max_media_file_bytes_s,
+            validate=_validate_positive_int,
+            style=_QSTYLE,
+        ).ask()
+        if max_media_file_bytes_s is None:
+            raise SystemExit(1)
+
+        max_media_total_bytes_s = questionary.text(
+            "Max total bytes for all downloaded images",
+            default=max_media_total_bytes_s,
+            validate=_validate_positive_int,
+            style=_QSTYLE,
+        ).ask()
+        if max_media_total_bytes_s is None:
+            raise SystemExit(1)
+
     try:
         delay = float(delay_s.strip() or "0")
     except ValueError:
@@ -272,11 +347,33 @@ def run_interactive_wizard() -> argparse.Namespace:
     else:
         max_urls = None
 
+    try:
+        max_sitemap_depth = int(max_sitemap_depth_s.strip(), 10)
+    except ValueError:
+        max_sitemap_depth = DEFAULT_MAX_SITEMAP_DEPTH
+    try:
+        max_sitemap_urls = int(max_sitemap_urls_s.strip(), 10)
+    except ValueError:
+        max_sitemap_urls = DEFAULT_MAX_SITEMAP_URLS
+    try:
+        max_sitemap_bytes = int(max_sitemap_bytes_s.strip(), 10)
+    except ValueError:
+        max_sitemap_bytes = DEFAULT_MAX_SITEMAP_BYTES
+    try:
+        max_media_file_bytes = int(max_media_file_bytes_s.strip(), 10)
+    except ValueError:
+        max_media_file_bytes = DEFAULT_MAX_MEDIA_FILE_BYTES
+    try:
+        max_media_total_bytes = int(max_media_total_bytes_s.strip(), 10)
+    except ValueError:
+        max_media_total_bytes = DEFAULT_MAX_MEDIA_TOTAL_BYTES
+
     headless_on = "headless" in toggles
 
+    display_url = redact_url_for_logs(site_url or (sitemap_url or ""))
     summary_lines = [
         f"[cyan]Mode:[/] {'site' if site_url else 'sitemap'}",
-        f"[cyan]URL:[/] {site_url or sitemap_url}",
+        f"[cyan]URL:[/] {display_url}",
         f"[cyan]Out:[/] {out_dir}",
         f"[cyan]Headless:[/] {headless_on}",
         f"[cyan]Verbose:[/] {'verbose' in toggles}",
@@ -302,4 +399,10 @@ def run_interactive_wizard() -> argparse.Namespace:
         user_agent=user_agent,
         verbose="verbose" in toggles,
         interactive=True,
+        allow_unsafe_network_targets="unsafe_network" in toggles,
+        max_sitemap_depth=max_sitemap_depth,
+        max_sitemap_urls=max_sitemap_urls,
+        max_sitemap_bytes=max_sitemap_bytes,
+        max_media_file_bytes=max_media_file_bytes,
+        max_media_total_bytes=max_media_total_bytes,
     )
