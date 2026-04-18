@@ -101,50 +101,73 @@ docker run --rm -v "$(pwd)/out:/out" crawlboy \
 ## For LLM Agents
 
 Instructions for AI coding agents (Claude Code, Cursor, Copilot, etc.) to install and use Crawlboy.
-
 ### Installation
 
-```bash
+```
+You are an autonomous coding agent. Execute the following installation steps exactly and sequentially in a Unix-like shell environment.
+
+Constraints:
+- Stop immediately if any command fails and report the error
+- Do not skip steps
+- Assume Python 3 and pip are available
+- Use the project directory as the working directory after cloning
+
+Steps to execute:
 git clone https://github.com/aksharahegde/crawlboy.git
 cd crawlboy
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
 crawl4ai-setup
+
+After completion:
+- Confirm success by checking that dependencies are installed
+- Report final status (success/failure)
+- If failure occurs, output the exact failing command and error message
 ```
 
 ### Running a Scrape
 
-Crawl a site by auto-discovering its sitemap:
+```
+You are an autonomous coding agent. Execute the following crawl task using the installed `crawlboy` tool in a Unix-like shell.
 
-```bash
+Constraints:
+- Ensure the virtual environment is activated before running any command
+- Stop immediately if any command fails and report the error
+- Do not modify flags unless explicitly instructed
+- Assume the tool is already installed in the current project
+
+Task Options (choose ONE based on input):
+
+Option A — Crawl using site URL (auto-discover sitemap):
 source .venv/bin/activate
 crawlboy --site-url 'https://www.example.com' --out-dir ./out
-```
 
-Or provide a direct sitemap URL:
-
-```bash
+Option B — Crawl using direct sitemap URL:
 source .venv/bin/activate
 crawlboy --sitemap-url 'https://example.com/sitemap.xml' --out-dir ./out
-```
 
-Useful flags for agent workflows:
+Optional Flags (use only if specified in input):
+--max-urls N
+--save-html
+--download-images
+--delay N
+--fail-fast
 
-- `--max-urls N` — limit to N pages (good for testing)
-- `--save-html` — also save raw HTML
-- `--download-images` — download images and rewrite paths in Markdown/HTML
-- `--delay N` — wait N seconds between pages to avoid rate limiting
-- `--fail-fast` — stop on first error instead of continuing
+Execution Rules:
+- Always activate the virtual environment first
+- Append any specified flags to the crawlboy command
+- Ensure output directory is created if it does not exist
 
-Output structure:
-
-```
-out/
-├── md/          # One Markdown file per page, mirroring URL path
-├── html/        # Raw HTML (with --save-html)
-├── media/       # Downloaded images (with --download-images)
-└── errors.jsonl # Failed URLs with error details
+After completion:
+- Verify that the ./out directory exists
+- Confirm presence of expected outputs:
+  - md/ (Markdown files)
+  - html/ (if --save-html used)
+  - media/ (if --download-images used)
+  - errors.jsonl (if any failures occurred)
+- Report final status (success/failure)
+- If failure occurs, output the exact failing command and error message
 ```
 
 ## Verified Working
