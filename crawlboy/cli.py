@@ -209,6 +209,10 @@ def run_interactive_wizard() -> argparse.Namespace:
             ),
             questionary.Choice("Save raw HTML under html/", value="save_html"),
             questionary.Choice(
+                "Add YAML frontmatter with page meta tags",
+                value="meta_frontmatter",
+            ),
+            questionary.Choice(
                 "Download images to media/ and rewrite links",
                 value="download_images",
             ),
@@ -394,6 +398,7 @@ def run_interactive_wizard() -> argparse.Namespace:
         headless=headless_on,
         max_urls=max_urls,
         save_html="save_html" in toggles,
+        meta_frontmatter="meta_frontmatter" in toggles,
         download_images="download_images" in toggles,
         fail_fast="fail_fast" in toggles,
         user_agent=user_agent,

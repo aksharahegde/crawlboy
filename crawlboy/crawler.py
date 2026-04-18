@@ -21,6 +21,11 @@ from urllib.parse import urldefrag, urlparse, urljoin, urlunparse
 import httpx
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 
+from crawlboy.meta_extract import (
+    build_meta_frontmatter_document,
+    format_markdown_with_frontmatter,
+)
+
 log = logging.getLogger(__name__)
 
 DEFAULT_MAX_SITEMAP_BYTES = 5_000_000
@@ -692,7 +697,7 @@ async def run(args: argparse.Namespace) -> int:
 
     log.info(
         "Crawl start out_dir=%s max_urls=%s delay=%s page_timeout_ms=%s headless=%s "
-        "download_images=%s save_html=%s fail_fast=%s user_agent=%s allow_unsafe_network_targets=%s",
+        "download_images=%s save_html=%s meta_frontmatter=%s fail_fast=%s user_agent=%s allow_unsafe_network_targets=%s",
         out_dir,
         args.max_urls,
         args.delay,
@@ -700,6 +705,7 @@ async def run(args: argparse.Namespace) -> int:
         args.headless,
         args.download_images,
         args.save_html,
+        args.meta_frontmatter,
         args.fail_fast,
         args.user_agent,
         args.allow_unsafe_network_targets,
@@ -953,6 +959,13 @@ async def run(args: argparse.Namespace) -> int:
                             html_body, base_for_assets, url_to_rel
                         )
 
+                if args.meta_frontmatter:
+                    fm_doc = build_meta_frontmatter_document(
+                        source_url=base_for_assets,
+                        html=html_body,
+                    )
+                    md = format_markdown_with_frontmatter(md, fm_doc)
+
                 md_path = safe_out_path(out_dir, Path("md") / rel_md)
                 md_path.parent.mkdir(parents=True, exist_ok=True)
                 md_path.write_text(md, encoding="utf-8")
@@ -1085,6 +1098,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--save-html",
         action="store_true",
         help="Also write HTML under html/ mirroring the same path hierarchy as md/",
+    )
+    p.add_argument(
+        "--meta-frontmatter",
+        action="store_true",
+        help="Prepend YAML frontmatter with source_url and HTML meta tags (title, canonical, meta name/property/http-equiv)",
     )
     p.add_argument(
         "--download-images",
