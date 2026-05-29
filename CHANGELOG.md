@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-05-29
+
 ### Changed
 
 - **Crawl4AI** — minimum dependency raised to `>=0.8.6` ([unclecode/crawl4ai](https://github.com/unclecode/crawl4ai) 0.8.x: security fixes, `MarkdownGenerationResult` API, Playwright/patchright updates)
