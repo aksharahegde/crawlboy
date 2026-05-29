@@ -7,6 +7,7 @@ WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY crawlboy/ crawlboy/
 RUN pip install --no-cache-dir . \
+    && pip install --no-cache-dir 'lxml>=6.1.0' \
     && crawl4ai-setup
 
 ENTRYPOINT ["crawlboy"]

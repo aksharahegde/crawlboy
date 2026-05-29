@@ -5,6 +5,13 @@ All notable changes to Crawlboy will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Crawl4AI** — minimum dependency raised to `>=0.8.6` ([unclecode/crawl4ai](https://github.com/unclecode/crawl4ai) 0.8.x: security fixes, `MarkdownGenerationResult` API, Playwright/patchright updates)
+- **lxml** — CI/Docker install upgrades to `>=6.1.0` after `pip install` to fix PYSEC-2026-87 until crawl4ai relaxes `lxml~=5.3`
+
 ## [1.1.0] - 2026-04-18
 
 ### Added
