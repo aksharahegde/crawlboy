@@ -1,6 +1,6 @@
 # Crawlboy
 
-Sequentially crawls every URL from a sitemap (including nested sitemap indexes) with [Crawl4AI](https://docs.crawl4ai.com/core/quickstart/) and writes one Markdown file per page.
+Sequentially crawls every URL from a sitemap (including nested sitemap indexes) with [Crawl4AI](https://docs.crawl4ai.com/core/quickstart/) (0.8.6+) and writes one Markdown file per page.
 
 Output mirrors the URL path under `--out-dir/md/`: each path segment becomes a directory and the last segment becomes the filename.
 

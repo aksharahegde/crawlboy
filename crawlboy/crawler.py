@@ -476,9 +476,10 @@ def markdown_text(result) -> str:
     md = result.markdown
     if md is None:
         return ""
-    if isinstance(md, str):
-        return md
-    return str(md)
+    raw = getattr(md, "raw_markdown", None)
+    if raw:
+        return raw
+    return md if isinstance(md, str) else str(md)
 
 
 def normalize_asset_url(u: str) -> str:
