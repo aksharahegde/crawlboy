@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **nltk** — CI/Docker install upgrades to v3.10.0-rc1 after `pip install` to fix PYSEC-2026-597 until nltk `>=3.10.0` is on PyPI
+
 ## [1.2.0] - 2026-05-29
 
 ### Changed

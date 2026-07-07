@@ -20,6 +20,8 @@ jobs:
           pip install -e .[dev]
           # crawl4ai pins lxml~=5.3 (PYSEC-2026-87); upgrade after install until upstream allows >=6.1
           pip install 'lxml>=6.1.0'
+          # crawl4ai pulls nltk>=3.9.1 (PYSEC-2026-597); upgrade after install until 3.10.0 is on PyPI
+          pip install 'nltk @ git+https://github.com/nltk/nltk@v3.10.0-rc1'
       - name: Security tests
         run: pytest tests/security
       - name: Bandit
