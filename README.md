@@ -1,5 +1,7 @@
 # Crawlboy
 
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/crawlboy?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/crawlboy)
+
 Sequentially crawls every URL from a sitemap (including nested sitemap indexes) with [Crawl4AI](https://docs.crawl4ai.com/core/quickstart/) (0.8.6+) and writes one Markdown file per page.
 
 Output mirrors the URL path under `--out-dir/md/`: each path segment becomes a directory and the last segment becomes the filename.
